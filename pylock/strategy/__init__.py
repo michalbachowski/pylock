@@ -5,7 +5,11 @@ import abc
 class Base(abc.ABCMeta):
 
     def is_valid(self):
-        return True
+        return True # pragma: no cover
+
+    @abc.abstractmethod
+    def exists(self):
+        pass # pragma: no cover
 
     @abc.abstractmethod
     def create(self, pid):

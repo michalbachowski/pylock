@@ -1,86 +1,168 @@
 # encoding: utf-8
-""" Tests for lockfile module """
+""" Tests for pylock.__init__ module """
 import os
+import mock
 import unittest
-import time
-import tempfile
 
-from mapnocc.lockfile import (Lockfile, AlreadyLockedError, \
-                              CouldNotWritePidfileError)
+from pylock import Lock, AlreadyLockedError, CouldNotCreateLockError
+from pylock.strategy import Base
+from pylock.states import LockState
 
-(_, lockfile) = tempfile.mkstemp('.pid', 'mapnocc_test_lockfile')
+class LockTest(unittest.TestCase):
 
-class FakeLock(object):
+    def setUp(self):
+        self.lockfile = '/tmp/lockfile'
+        self.strategy = mock.MagicMock(Base)
+        self.strategy.is_valid.return_value = True
+        self.strategy.create.return_value = True
+        self.strategy.exists.return_value = False
+        self.delay_provider = mock.MagicMock()
+        self.signal_submitter = mock.MagicMock()
+        self.current_time_provider = mock.MagicMock()
+        self.max_age = 10
 
-    def __init__(self, path):
-        self.cmd = 'while [ 1 ]; do echo $! > %s; sleep 4; exit; done &'
-        self.path = path
+    @property
+    def lock(self):
+        return Lock(self.strategy, max_age=self.max_age,
+                         delay_provider=self.delay_provider,
+                         current_time_provider=self.current_time_provider,
+                         signal_submitter=self.signal_submitter)
 
-    def __enter__(self):
-        os.system(self.cmd % self.path)
+    def test_acquire_returns_LockState(self):
+        self.assertIsInstance(self.lock.acquire(), LockState)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        os.system("rm %s" % self.path)
+    def test_acquire_called_multiple_times_locks_only_once(self):
+        lock = self.lock
+        self.assertTrue(lock.acquire().is_owner)
+        # lock exists
+        self.strategy.exists.return_value = True
+        # current app owns lock
+        self.strategy.read_pid.return_value = lock.pid
+        self.assertTrue(lock.acquire().is_owner)
 
+        self.strategy.create.assert_called_once_with(lock.pid)
 
-class LockfileTest(unittest.TestCase):
+    def test_acquire_returns_LockState_indicating_failed_lock_when_lock_can_not_be_obtained(self):
+        lock = self.lock
+        # lock exists
+        self.strategy.exists.return_value = True
+        # other app owns lock
+        self.strategy.read_pid.return_value = lock.pid + 1
+        # lock is not outdated
+        self.current_time_provider.return_value = 123
+        self.strategy.get_create_date.return_value = 123 - self.max_age // 2
 
-    def tearDown(self):
-        try:
-            os.remove(lockfile)
-        except:
-            pass
+        self.assertFalse(lock.acquire().is_owner)
+        self.assertFalse(lock.acquire().can_acquire)
+        self.assertTrue(lock.acquire().is_locked)
 
-    def test_acquire_called_multiple_times_returns_always_true(self):
-        l = Lockfile(lockfile)
-        self.assertTrue(l.acquire())
-        self.assertTrue(l.acquire())
+    def test_acquire_raises_exception_when_lock_can_be_obtained_but_failed_to_create(self):
+        self.strategy.create.return_value = False
+        self.assertRaises(CouldNotCreateLockError, self.lock.acquire)
 
-    def test_acquire_raises_exception_when_lock_can_not_be_obtained(self):
-        with FakeLock(lockfile):
-            time.sleep(1)
-            l = Lockfile(lockfile, tries=1, sleeptime=1)
-            self.assertRaises(AlreadyLockedError, l.acquire)
+    def test_acquire_breaks_outdated_lock_and_kills_lock_owner(self):
+        fake_pid = 99999999
+        # lock exists
+        self.strategy.exists.return_value = True
+        # other app owns lock
+        self.strategy.read_pid.return_value = fake_pid
 
-    def test_acquire_breaks_outdated_lock(self):
-        with FakeLock(lockfile):
-            # wait 2 seconds for file to expire
-            time.sleep(2)
-            l = Lockfile(lockfile, max_age=1, tries=1, sleeptime=1)
-            self.assertTrue(l.acquire())
+        # but lock is outdated
+        self.current_time_provider.return_value = 123
+        self.strategy.get_create_date.return_value = 123 - self.max_age * 2
+
+        self.assertTrue(self.lock.acquire().is_owner)
+        self.strategy.clean.assert_called_once_with()
+
+        self.signal_submitter.assert_has_calls(
+            [mock.call(fake_pid, 0),
+            mock.call(fake_pid, 9)])
+
+    def test_acquire_with_max_age_not_set_assumes_lock_always_active(self):
+        self.max_age = None
+        fake_pid = 99999999
+
+        # lock exists
+        self.strategy.exists.return_value = True
+        # other app owns lock
+        self.strategy.read_pid.return_value = fake_pid
+
+        # but lock is outdated
+        self.current_time_provider.return_value = 123
+        self.strategy.get_create_date.return_value = 12
+
+        self.assertFalse(self.lock.acquire().is_owner)
+        self.assertEqual(0, self.strategy.clean.call_count)
+
+    def test_acquire_breaks_invalid_lock_and_kills_its_owner(self):
+        self.strategy.is_valid.return_value = False
+        self.assertTrue(self.lock.acquire().is_owner)
+
+        self.strategy.clean.assert_called_once_with()
+
+        self.signal_submitter.assert_called_once_with(self.strategy.read_pid.return_value, 9)
 
     def test_acquire_breaks_locks_from_non_existent_processes(self):
-        with FakeLock(lockfile):
-            # wait for fake subprocess to expire
-            time.sleep(5)
-            l = Lockfile(lockfile, max_age = 1000, tries=1, sleeptime=1)
-            self.assertTrue(l.acquire())
+        # lock exists
+        self.strategy.exists.return_value = True
+        # other app owns lock
+        self.strategy.read_pid.return_value = self.lock.pid + 1
+        # but this app does not exist
+        self.signal_submitter.side_effect = OSError()
+        self.assertTrue(self.lock.acquire().is_owner)
+        self.strategy.clean.assert_called_once_with()
 
-    def test_acquire_raises_CouldNotWritePidfileError_when_file_could_not_be_written(self):
-        l = Lockfile('/non/existent/path')
-        self.assertRaises(CouldNotWritePidfileError, l.acquire)
+    def test_release_removes_lock(self):
+        # lock exists
+        self.strategy.exists.return_value = True
+        # current app owns lock
+        self.strategy.read_pid.return_value = self.lock.pid
 
-    def test_release_removes_pidfile(self):
-        l = Lockfile(lockfile)
-        l.acquire()
-        self.assertTrue(l.release())
+        self.assertIsInstance(self.lock.release(), Lock)
 
-    def test_release_does_not_complain_if_lock_file_does_not_exist(self):
-        l = Lockfile('/non/existent.path')
-        l.release()
-        self.assertTrue(True)
+        self.strategy.clean.assert_called_once_with()
 
-    def test_release_does_not_remove_lock_owned_by_someoneelse(self):
-        with FakeLock(lockfile):
-            time.sleep(1)
-            self.assertTrue(os.path.exists(lockfile))
-            l = Lockfile(lockfile)
-            l.release()
-            self.assertTrue(os.path.exists(lockfile))
-        self.assertFalse(os.path.exists(lockfile))
+    def test_release_does_not_remove_lock_that_does_not_own(self):
+        # other app owns lock
+        self.strategy.read_pid.return_value = 999
 
-    def test_enter_acquires_lock_exit_releases_lock(self):
-        with Lockfile(lockfile) as lock:
+        self.assertIsInstance(self.lock.release(), Lock)
+
+        self.assertEqual(0, self.strategy.clean.call_count)
+
+    def test_Lock_object_acts_as_context_manager(self):
+
+        # noone owns lock
+        self.strategy.read_pid.return_value = None
+
+        # lock is not outdated
+        self.current_time_provider.return_value = 123
+        self.strategy.get_create_date.return_value = 123 - self.max_age // 2
+
+        with self.lock as lock:
+            self.strategy.exists.return_value = True
+            self.strategy.create.assert_called_once_with(lock.pid)
+
+            # current app owns lock
+            self.strategy.read_pid.return_value = self.lock.pid
+
             self.assertTrue(lock.has_lock)
-            self.assertTrue(os.path.exists(lockfile))
-        self.assertFalse(os.path.exists(lockfile))
+
+        self.strategy.clean.assert_called_once_with()
+
+    def test_when_entering_context_AlreadyLocked_exception_is_raised_is_lock_can_not_be_obtained(self):
+
+        # lock exists
+        self.strategy.exists.return_value = True
+
+        # other process owns lock
+        self.strategy.read_pid.return_value = 99
+
+        # lock is not outdated
+        self.current_time_provider.return_value = 123
+        self.strategy.get_create_date.return_value = 123 - self.max_age // 2
+
+        with self.assertRaises(AlreadyLockedError):
+            with self.lock:
+                pass
+

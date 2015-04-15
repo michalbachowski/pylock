@@ -25,14 +25,16 @@ class AlreadyLockedError(BaseError):
     """Error class that tells requested lock is unavailable by other
     instance """
 
-    def __init__(self, path):
+    def __init__(self):
         super(AlreadyLockedError, self).__init__('Requested lock has been already acquired')
 
 
 class Lock(object):
     """Class that represents single lock """
 
-    def __init__(self, strategy, max_age=None, tries=3, sleeptime=2):
+    def __init__(self, strategy, max_age=None, tries=3, sleeptime=2,
+                 delay_provider=time.sleep, current_time_provider=time.time,
+                 signal_submitter=os.kill):
         """ Object initialization
 
         :param strategy: lock strategy that performs locking
@@ -50,6 +52,9 @@ class Lock(object):
         self._max_age = max_age
         self._tries = tries
         self._sleeptime = sleeptime
+        self._delay_provider = delay_provider
+        self._current_time_provider = current_time_provider
+        self._signal_submitter = signal_submitter
 
     @cached_property
     def pid(self):
@@ -92,7 +97,7 @@ class Lock(object):
                     return state
             except CouldNotCreateLockError:
                 if locktries > 0:
-                    time.sleep(self._sleeptime)
+                    self._delay_provider(self._sleeptime)
                 else:
                     raise
         return LockState.LOCKED
@@ -112,6 +117,7 @@ class Lock(object):
         if state.should_kill_old_process:
             self._kill_old_process()
 
+        print state
         if state.should_clean:
             self._strategy.clean()
 
@@ -131,6 +137,9 @@ class Lock(object):
         if not self._strategy.is_valid():
             return LockState.INVALID
 
+        if not self._strategy.exists():
+            return LockState.UNLOCKED
+
         if self._i_own_lock():
             return LockState.OWNER
 
@@ -147,7 +156,7 @@ class Lock(object):
         with logger.context(pid=pid):
             logger.debug('checking pid owner')
             try:
-                os.kill(pid, 0)
+                self._signal_submitter(pid, 0)
                 logger.debug('pid owner is working')
                 return True
             except (OSError, TypeError):
@@ -157,17 +166,14 @@ class Lock(object):
     def _i_own_lock(self):
         return self._strategy.read_pid() == self.pid
 
-    def _is_outdated(self, pid_create_date):
+    def _is_outdated(self):
         if self._max_age is None:
             return False
 
-        try:
-            return time.time() - self._strategy.get_create_date() > self._max_age
-        except OSError:
-            return False
+        return self._current_time_provider() - self._strategy.get_create_date() > self._max_age
 
     def _kill_old_process(self):
-        os.kill(self._strategy.read_pid(), 9)
+        self._signal_submitter(self._strategy.read_pid(), 9)
 
     def release(self):
         """ Method releases previously acquired lock

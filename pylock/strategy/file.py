@@ -22,6 +22,9 @@ class File(Base):
 
         self._path = path
 
+    def exists(self):
+        return os.path.exists(self._path)
+
     def create(self, pid):
         """ Write the PID in the named PID file.
 
@@ -89,5 +92,8 @@ class File(Base):
                 pidfile.close()
 
     def get_create_date(self, max_age):
-        return os.stat(self._path).st_mtime
+        try:
+            return os.stat(self._path).st_mtime
+        except OSError:
+            return 0
 
