@@ -4,15 +4,17 @@ import os
 import errno
 
 from logging_utils import getLogger
+from logging_utils.sentinel import SentinelBuilder
 
 from pylock.strategy import Base
 
 logger = getLogger(__name__)
+sentinel = SentinelBuilder(logger, reraise=False, with_traceback=False)
 
 class File(Base):
     """Class that represents file-based locking strategy (PID file)"""
 
-    def __init__(self, path):
+    def __init__(self, path, atomic_writer=None):
         """ Object initialization
 
         :param path: path to lockfile
@@ -21,6 +23,7 @@ class File(Base):
         super(File, self).__init__()
 
         self._path = path
+        self._atomic_writer = atomic_writer
 
     def exists(self):
         return os.path.exists(self._path)
@@ -34,21 +37,9 @@ class File(Base):
         :param pid: pid to be written
         :type pid: int
         """
-        open_flags = (os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        open_mode = 0o644
-
-        try:
-            pidfile_fd = os.open(self._path, open_flags, open_mode)
-        except:
-            return False
-
-        try:
-            pidfile = os.fdopen(pidfile_fd, 'w')
-        except (OSError, TypeError):
-            os.close(pidfile_fd)
-        else:
-            pidfile.write("%d\n" % pid)
-            pidfile.close()
+        with sentinel('Create lockfile'):
+            # sentinel will catch any exception, log message and suppress it
+            self._atomic_writer(self._path, str(pid))
             return True
         return False
 
@@ -86,12 +77,12 @@ class File(Base):
             try:
                 return int(pidfile.readline().strip())
             except ValueError:
-                logger.exception('coild not parse pidfile content')
+                logger.exception('could not parse pidfile content')
                 pass
             finally:
                 pidfile.close()
 
-    def get_create_date(self, max_age):
+    def get_create_date(self):
         try:
             return os.stat(self._path).st_mtime
         except OSError:

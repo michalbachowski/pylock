@@ -1,7 +1,6 @@
 # encoding: utf-8
 """ Tests for pylock.__init__ module """
-import os
-import mock
+from pylock._compat import mock
 import unittest
 
 from pylock import Lock, AlreadyLockedError, CouldNotCreateLockError
