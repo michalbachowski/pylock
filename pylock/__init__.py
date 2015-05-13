@@ -117,7 +117,6 @@ class Lock(object):
         if state.should_kill_old_process:
             self._kill_old_process()
 
-        print state
         if state.should_clean:
             self._strategy.clean()
 
