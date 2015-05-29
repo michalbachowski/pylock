@@ -66,7 +66,7 @@ class Lock(object):
 
         :rtype: bool
         """
-        return self._get_lock_state().is_owner
+        return self.get_lock_state().is_owner
 
     def acquire(self):
         """ Method acquires lock
@@ -109,7 +109,7 @@ class Lock(object):
         :raise CouldNotCreateLockError: lock could not be created but was \
                                         supposed to
         """
-        state = self._get_lock_state()
+        state = self.get_lock_state()
 
         if not state.can_acquire:
             return state
@@ -125,7 +125,7 @@ class Lock(object):
 
         return LockState.OWNER
 
-    def _get_lock_state(self):
+    def get_lock_state(self):
         """Method checks whether lock can be acquired.
 
         :returns: True if lock can be acquired, False if not.
