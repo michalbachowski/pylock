@@ -7,6 +7,7 @@ from cached_property import cached_property
 from logging_utils import getLogger
 
 from .states import LockState
+from .pid_owner_client import SubprocessClient
 
 logger = getLogger(__name__)
 
@@ -34,7 +35,7 @@ class Lock(object):
 
     def __init__(self, strategy, max_age=None, tries=3, sleeptime=2,
                  delay_provider=time.sleep, current_time_provider=time.time,
-                 signal_submitter=os.kill):
+                 pid_owner_client=None):
         """ Object initialization
 
         :param strategy: lock strategy that performs locking
@@ -54,7 +55,7 @@ class Lock(object):
         self._sleeptime = sleeptime
         self._delay_provider = delay_provider
         self._current_time_provider = current_time_provider
-        self._signal_submitter = signal_submitter
+        self._pid_owner_client = pid_owner_client or SubprocessClient()
 
     @cached_property
     def pid(self):
@@ -151,16 +152,7 @@ class Lock(object):
         return LockState.LOCKED
 
     def _is_pid_owner_working(self):
-        pid = self._strategy.read_pid()
-        with logger.context(pid=pid):
-            logger.debug('checking pid owner')
-            try:
-                self._signal_submitter(pid, 0)
-                logger.debug('pid owner is working')
-                return True
-            except (OSError, TypeError):
-                logger.debug('pid owner does not work')
-            return False
+        return self._pid_owner_client.is_alive(self._strategy.read_pid())
 
     def _i_own_lock(self):
         return self._strategy.read_pid() == self.pid
@@ -172,7 +164,7 @@ class Lock(object):
         return self._current_time_provider() - self._strategy.get_create_date() > self._max_age
 
     def _kill_old_process(self):
-        self._signal_submitter(self._strategy.read_pid(), 9)
+        self._pid_owner_client.terminate(self._strategy.read_pid())
 
     def release(self):
         """ Method releases previously acquired lock

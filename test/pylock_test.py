@@ -6,6 +6,7 @@ import unittest
 from pylock import Lock, AlreadyLockedError, CouldNotCreateLockError
 from pylock.strategy import Base
 from pylock.states import LockState
+from pylock.pid_owner_client import Client
 
 class LockTest(unittest.TestCase):
 
@@ -16,7 +17,7 @@ class LockTest(unittest.TestCase):
         self.strategy.create.return_value = True
         self.strategy.exists.return_value = False
         self.delay_provider = mock.MagicMock()
-        self.signal_submitter = mock.MagicMock()
+        self.pid_owner_client = mock.MagicMock(spec=Client)
         self.current_time_provider = mock.MagicMock()
         self.max_age = 10
 
@@ -25,7 +26,7 @@ class LockTest(unittest.TestCase):
         return Lock(self.strategy, max_age=self.max_age,
                          delay_provider=self.delay_provider,
                          current_time_provider=self.current_time_provider,
-                         signal_submitter=self.signal_submitter)
+                         pid_owner_client=self.pid_owner_client)
 
     def test_acquire_returns_LockState(self):
         self.assertIsInstance(self.lock.acquire(), LockState)
@@ -73,9 +74,8 @@ class LockTest(unittest.TestCase):
         self.assertTrue(self.lock.acquire().is_owner)
         self.strategy.clean.assert_called_once_with()
 
-        self.signal_submitter.assert_has_calls(
-            [mock.call(fake_pid, 0),
-            mock.call(fake_pid, 9)])
+        self.assertGreater(self.pid_owner_client.is_alive.call_count, 0)
+        self.pid_owner_client.terminate.assert_called_once_with(fake_pid)
 
     def test_acquire_with_max_age_not_set_assumes_lock_always_active(self):
         self.max_age = None
@@ -99,7 +99,7 @@ class LockTest(unittest.TestCase):
 
         self.strategy.clean.assert_called_once_with()
 
-        self.signal_submitter.assert_called_once_with(self.strategy.read_pid.return_value, 9)
+        self.pid_owner_client.terminate.assert_called_once_with(self.strategy.read_pid.return_value)
 
     def test_acquire_breaks_locks_from_non_existent_processes(self):
         # lock exists
@@ -107,7 +107,7 @@ class LockTest(unittest.TestCase):
         # other app owns lock
         self.strategy.read_pid.return_value = self.lock.pid + 1
         # but this app does not exist
-        self.signal_submitter.side_effect = OSError()
+        self.pid_owner_client.is_alive.return_value = False
         self.assertTrue(self.lock.acquire().is_owner)
         self.strategy.clean.assert_called_once_with()
 
