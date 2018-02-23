@@ -1,8 +1,7 @@
 # encoding: utf-8
 import abc
 import os
-from logging_utils import getLogger
-from logging_utils.sentinel import SentinelBuilder
+from logging_utils import getLogger, SentinelBuilder
 
 from ._compat import with_metaclass
 
