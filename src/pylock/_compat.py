@@ -22,12 +22,17 @@ def with_metaclass(meta, *bases):
             return meta(name, bases, d)
     return type.__new__(metaclass, b'temporary_class', (), {})
 
-if not is_py2:
-    # Python 3
+# try to import "mock" (built-in Py3, external module in Py2)
+try:
+    from unittest import mock as _mock
+    mock = _mock
+except ImportError:
+# mock is required only for tests - it might not be available for regular use
+    try:
+        import mock
+    except ImportError:
+        pass
 
-    from unittest import mock
-else:
-    # Python 2
+__all__ = ['mock']
 
-    import mock
 
