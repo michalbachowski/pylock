@@ -2,7 +2,6 @@
 """
 Python 2.7.x, 3.2+ compatability module.
 """
-from __future__ import unicode_literals
 import sys
 
 is_py2 = sys.version_info[0] == 2
@@ -20,7 +19,7 @@ def with_metaclass(meta, *bases):
 
         def __new__(cls, name, this_bases, d):
             return meta(name, bases, d)
-    return type.__new__(metaclass, b'temporary_class', (), {})
+    return type.__new__(metaclass, 'temporary_class', (), {})
 
 # try to import "mock" (built-in Py3, external module in Py2)
 try:
