@@ -21,7 +21,7 @@ fi
 # install python packages
 if [ -x $(which pip) ]; then
     pip install --upgrade pip
-    pip install 'tox==2.7.0' -r/home/vagrant/app/test/requirements.txt
+    pip install 'tox'
 fi
 
 if [ -x $(which cpan) ]; then
